@@ -1,0 +1,7 @@
+{
+  "name": "openclaw-chat-static",
+  "private": true,
+  "scripts": {
+    "start": "npx serve . -l $PORT"
+  }
+}
