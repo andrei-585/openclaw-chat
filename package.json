@@ -1,7 +1,7 @@
 {
-  "name": "openclaw-chat-static",
+  "name": "openclaw-chat-proxy",
   "private": true,
   "scripts": {
-    "start": "npx serve . -l $PORT"
+    "start": "node server.js"
   }
 }
