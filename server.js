@@ -101,7 +101,8 @@ const server = http.createServer(async (req, res) => {
     };
 
     const headers = {
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      Accept: "text/event-stream, application/json"
     };
     if (OPENCLAW_API_KEY) {
       headers.Authorization = `Bearer ${OPENCLAW_API_KEY}`;
@@ -114,10 +115,18 @@ const server = http.createServer(async (req, res) => {
         body: JSON.stringify(upstreamBody)
       });
 
-      if (!upstream.body) {
+      if (!upstream.ok) {
         const text = await upstream.text();
         sendJson(res, upstream.status || 502, {
-          error: text || "Upstream response has no body"
+          error: `Upstream API error ${upstream.status}`,
+          details: text || "Unknown upstream error"
+        });
+        return;
+      }
+
+      if (!upstream.body) {
+        sendJson(res, 502, {
+          error: "Upstream response has no body"
         });
         return;
       }
