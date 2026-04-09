@@ -6,6 +6,7 @@ const PORT = Number(process.env.PORT || 3000);
 const OPENCLAW_BASE_URL = (process.env.OPENCLAW_BASE_URL || "https://openclaw-production-1df1.up.railway.app/v1").replace(/\/+$/, "");
 const OPENCLAW_MODEL = process.env.OPENCLAW_MODEL || "llama3.2:3b";
 const OPENCLAW_API_KEY = process.env.OPENCLAW_API_KEY || "";
+const OPENCLAW_CHAT_PATH = process.env.OPENCLAW_CHAT_PATH || "";
 
 const INDEX_PATH = path.join(__dirname, "index.html");
 
@@ -44,6 +45,31 @@ function applyCommonHeaders(res) {
   res.setHeader("Referrer-Policy", "no-referrer");
 }
 
+function unique(values) {
+  return [...new Set(values)];
+}
+
+function buildUpstreamUrls() {
+  const explicitPath = OPENCLAW_CHAT_PATH.trim();
+  if (explicitPath) {
+    const path = explicitPath.startsWith("/") ? explicitPath : `/${explicitPath}`;
+    return [`${OPENCLAW_BASE_URL}${path}`];
+  }
+
+  const base = OPENCLAW_BASE_URL;
+  const baseNoV1 = base.endsWith("/v1") ? base.slice(0, -3) : base;
+  const bases = unique([base, baseNoV1]);
+  const paths = ["/chat/completions", "/api/chat/completions", "/v1/chat/completions"];
+
+  const urls = [];
+  for (const item of bases) {
+    for (const p of paths) {
+      urls.push(`${item}${p}`);
+    }
+  }
+  return unique(urls);
+}
+
 const server = http.createServer(async (req, res) => {
   applyCommonHeaders(res);
 
@@ -75,7 +101,8 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       ok: true,
       service: "openclaw-chat-proxy",
-      model: OPENCLAW_MODEL
+      model: OPENCLAW_MODEL,
+      upstreamBase: OPENCLAW_BASE_URL
     });
     return;
   }
@@ -109,40 +136,68 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-      const upstream = await fetch(`${OPENCLAW_BASE_URL}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(upstreamBody)
+      const tried = [];
+      const urls = buildUpstreamUrls();
+
+      for (const url of urls) {
+        let upstream;
+        try {
+          upstream = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(upstreamBody),
+            redirect: "manual"
+          });
+        } catch (err) {
+          tried.push({ url, status: "network_error", details: err instanceof Error ? err.message : String(err) });
+          continue;
+        }
+
+        if (upstream.status === 404) {
+          tried.push({ url, status: 404 });
+          continue;
+        }
+
+        if (!upstream.ok) {
+          const text = await upstream.text();
+          const location = upstream.headers.get("location");
+          sendJson(res, upstream.status || 502, {
+            error: `Upstream API error ${upstream.status}`,
+            details: text || "Unknown upstream error",
+            location: location || undefined,
+            tried
+          });
+          return;
+        }
+
+        if (!upstream.body) {
+          sendJson(res, 502, {
+            error: "Upstream response has no body",
+            tried
+          });
+          return;
+        }
+
+        res.statusCode = upstream.status;
+        res.setHeader("Content-Type", upstream.headers.get("content-type") || "text/event-stream; charset=utf-8");
+        res.setHeader("Cache-Control", "no-cache, no-transform");
+        res.setHeader("Connection", "keep-alive");
+
+        const reader = upstream.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(Buffer.from(value));
+        }
+        res.end();
+        return;
+      }
+
+      sendJson(res, 502, {
+        error: "No working upstream chat endpoint found",
+        details: "All known chat/completions paths returned 404 or network errors",
+        tried
       });
-
-      if (!upstream.ok) {
-        const text = await upstream.text();
-        sendJson(res, upstream.status || 502, {
-          error: `Upstream API error ${upstream.status}`,
-          details: text || "Unknown upstream error"
-        });
-        return;
-      }
-
-      if (!upstream.body) {
-        sendJson(res, 502, {
-          error: "Upstream response has no body"
-        });
-        return;
-      }
-
-      res.statusCode = upstream.status;
-      res.setHeader("Content-Type", upstream.headers.get("content-type") || "text/event-stream; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache, no-transform");
-      res.setHeader("Connection", "keep-alive");
-
-      const reader = upstream.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        res.write(Buffer.from(value));
-      }
-      res.end();
     } catch (err) {
       sendJson(res, 502, {
         error: "Failed to reach upstream API",
