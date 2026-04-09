@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw AI Chat</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            surface: {
+              light: "#f8fafc",
+              dark: "#111827"
+            }
+          },
+          keyframes: {
+            pulseDot: {
+              "0%, 80%, 100%": { opacity: "0.2", transform: "scale(0.9)" },
+              "40%": { opacity: "1", transform: "scale(1)" }
+            },
+            blink: {
+              "0%, 49%": { opacity: "1" },
+              "50%, 100%": { opacity: "0" }
+            }
+          },
+          animation: {
+            pulseDot: "pulseDot 1.2s infinite ease-in-out",
+            blink: "blink 1s step-end infinite"
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    :root {
+      --bg-light: radial-gradient(circle at 20% 20%, #dbeafe, #eef2ff 35%, #f8fafc 70%);
+      --bg-dark: radial-gradient(circle at 20% 20%, #1e293b, #111827 45%, #020617 85%);
+    }
+
+    body {
+      min-height: 100vh;
+      background: var(--bg-light);
+    }
+
+    .dark body {
+      background: var(--bg-dark);
+    }
+
+    .typing-dot:nth-child(1) { animation-delay: 0s; }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    .message-scroll {
+      scroll-behavior: smooth;
+    }
+  </style>
+</head>
+<body class="text-slate-900 dark:text-slate-100 transition-colors duration-300">
+  <div class="min-h-screen w-full">
+    <div class="mx-auto flex min-h-screen max-w-7xl flex-col md:flex-row p-3 md:p-4 gap-3">
+      <aside class="w-full md:w-72 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/70">
+        <div class="flex items-center justify-between">
+          <h1 class="text-lg font-semibold tracking-tight">OpenClaw Chat</h1>
+          <span class="text-xs rounded-full px-2 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">llama3.2:3b</span>
+        </div>
+
+        <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">
+          Single-file AI web chat with streaming responses.
+        </p>
+
+        <div class="mt-4 space-y-2">
+          <button id="newChatBtn" class="w-full rounded-xl bg-slate-900 text-white py-2.5 text-sm font-medium hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-slate-200 transition">
+            Clear Chat
+          </button>
+          <button id="themeBtn" class="w-full rounded-xl border border-slate-300 dark:border-slate-600 py-2.5 text-sm font-medium hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+            Toggle Theme
+          </button>
+        </div>
+
+        <div class="mt-6 rounded-xl border border-slate-200 dark:border-slate-700 p-3 text-xs text-slate-600 dark:text-slate-300">
+          <p class="font-medium mb-1 text-slate-800 dark:text-slate-100">Rate limit</p>
+          <p>One request every 5 seconds.</p>
+          <p class="mt-2" id="cooldownLabel">Ready</p>
+        </div>
+
+        <div class="mt-4 text-xs text-slate-500 dark:text-slate-400">
+          API: <span class="font-mono">/v1/chat/completions</span>
+        </div>
+      </aside>
+
+      <main class="flex-1 rounded-2xl border border-slate-200/70 bg-white/80 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/75 flex flex-col min-h-[70vh]">
+        <header class="border-b border-slate-200 dark:border-slate-700 px-4 py-3">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm md:text-base font-semibold">Chat</h2>
+            <span id="statusBadge" class="text-xs rounded-full px-2 py-1 bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300">Idle</span>
+          </div>
+        </header>
+
+        <section id="messages" class="message-scroll flex-1 overflow-y-auto px-3 md:px-5 py-4 space-y-4"></section>
+
+        <footer class="border-t border-slate-200 dark:border-slate-700 p-3 md:p-4">
+          <div id="warningBox" class="hidden mb-3 rounded-lg border border-amber-400/50 bg-amber-100/70 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300 px-3 py-2 text-sm"></div>
+          <div class="flex items-end gap-2 md:gap-3">
+            <textarea
+              id="promptInput"
+              rows="1"
+              placeholder="Type your message... (Enter to send, Shift+Enter for newline)"
+              class="w-full resize-none rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+            ></textarea>
+            <button
+              id="sendBtn"
+              class="rounded-xl bg-blue-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            >
+              Send
+            </button>
+          </div>
+        </footer>
+      </main>
+    </div>
+  </div>
+
+  <template id="typingTemplate">
+    <div class="inline-flex items-center gap-1">
+      <span class="typing-dot inline-block h-2 w-2 rounded-full bg-slate-400 animate-pulseDot"></span>
+      <span class="typing-dot inline-block h-2 w-2 rounded-full bg-slate-400 animate-pulseDot"></span>
+      <span class="typing-dot inline-block h-2 w-2 rounded-full bg-slate-400 animate-pulseDot"></span>
+    </div>
+  </template>
+
+  <script>
+    const API_BASE = "https://openclaw-production-1df1.up.railway.app/v1";
+    const MODEL = "llama3.2:3b";
+    const STORAGE_KEY = "openclaw-chat-history-v1";
+    const THEME_KEY = "openclaw-chat-theme-v1";
+    const RATE_LIMIT_MS = 5000;
+
+    const messagesEl = document.getElementById("messages");
+    const promptInput = document.getElementById("promptInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const newChatBtn = document.getElementById("newChatBtn");
+    const warningBox = document.getElementById("warningBox");
+    const statusBadge = document.getElementById("statusBadge");
+    const themeBtn = document.getElementById("themeBtn");
+    const cooldownLabel = document.getElementById("cooldownLabel");
+
+    let chatHistory = [];
+    let isRequestInFlight = false;
+    let lastRequestAt = 0;
+    let cooldownTimerId = null;
+
+    function uid() {
+      return crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+    }
+
+    function escapeText(value) {
+      return value.replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[ch]));
+    }
+
+    function saveHistory() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(chatHistory));
+    }
+
+    function loadHistory() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string");
+      } catch {
+        return [];
+      }
+    }
+
+    function showWarning(message) {
+      warningBox.textContent = message;
+      warningBox.classList.remove("hidden");
+    }
+
+    function hideWarning() {
+      warningBox.classList.add("hidden");
+      warningBox.textContent = "";
+    }
+
+    function setStatus(text, tone = "idle") {
+      statusBadge.textContent = text;
+      statusBadge.className = "text-xs rounded-full px-2 py-1";
+
+      if (tone === "busy") {
+        statusBadge.classList.add("bg-blue-100", "text-blue-700", "dark:bg-blue-900/40", "dark:text-blue-300");
+      } else if (tone === "error") {
+        statusBadge.classList.add("bg-rose-100", "text-rose-700", "dark:bg-rose-900/40", "dark:text-rose-300");
+      } else {
+        statusBadge.classList.add("bg-slate-100", "text-slate-600", "dark:bg-slate-800", "dark:text-slate-300");
+      }
+    }
+
+    function autoResizeInput() {
+      promptInput.style.height = "auto";
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 220) + "px";
+    }
+
+    function scrollToBottom() {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function renderMessage(message) {
+      const wrapper = document.createElement("article");
+      wrapper.dataset.id = message.id;
+      wrapper.className = "group";
+
+      const isUser = message.role === "user";
+      wrapper.innerHTML = `
+        <div class="flex ${isUser ? "justify-end" : "justify-start"}">
+          <div class="max-w-[92%] md:max-w-[80%] rounded-2xl px-4 py-3 ${
+            isUser
+              ? "bg-blue-600 text-white rounded-br-md"
+              : "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100 rounded-bl-md border border-slate-200 dark:border-slate-700"
+          }">
+            <div class="text-xs mb-1 opacity-70">${isUser ? "You" : "Assistant"}</div>
+            <div class="whitespace-pre-wrap break-words text-sm leading-relaxed message-content">${escapeText(message.content || "")}</div>
+            ${
+              !isUser
+                ? `<div class="mt-2 flex justify-end">
+                    <button class="copy-btn opacity-80 hover:opacity-100 rounded-md border border-slate-300 dark:border-slate-600 px-2 py-1 text-xs">
+                      Copy
+                    </button>
+                  </div>`
+                : ""
+            }
+          </div>
+        </div>
+      `;
+
+      const copyBtn = wrapper.querySelector(".copy-btn");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", async () => {
+          try {
+            await navigator.clipboard.writeText(message.content || "");
+            copyBtn.textContent = "Copied";
+            setTimeout(() => {
+              copyBtn.textContent = "Copy";
+            }, 1200);
+          } catch {
+            showWarning("Failed to copy text. Please copy manually.");
+          }
+        });
+      }
+
+      messagesEl.appendChild(wrapper);
+    }
+
+    function updateMessageContent(id, content, showCursor = false) {
+      const card = messagesEl.querySelector(`[data-id="${CSS.escape(id)}"]`);
+      if (!card) return;
+      const contentEl = card.querySelector(".message-content");
+      if (!contentEl) return;
+
+      if (showCursor) {
+        contentEl.innerHTML = `${escapeText(content)}<span class="inline-block ml-0.5 w-2 h-4 align-middle bg-slate-500 dark:bg-slate-300 animate-blink"></span>`;
+      } else {
+        contentEl.textContent = content;
+      }
+    }
+
+    function renderAllMessages() {
+      messagesEl.innerHTML = "";
+      if (!chatHistory.length) {
+        const empty = document.createElement("div");
+        empty.className = "h-full grid place-items-center text-center text-slate-500 dark:text-slate-400 px-4";
+        empty.innerHTML = `
+          <div>
+            <p class="font-medium text-slate-700 dark:text-slate-200 mb-1">Start a conversation</p>
+            <p class="text-sm">Ask anything and get a streamed response.</p>
+          </div>
+        `;
+        messagesEl.appendChild(empty);
+        return;
+      }
+      for (const msg of chatHistory) renderMessage(msg);
+      scrollToBottom();
+    }
+
+    function setTheme(mode) {
+      const dark = mode === "dark";
+      document.documentElement.classList.toggle("dark", dark);
+      localStorage.setItem(THEME_KEY, dark ? "dark" : "light");
+      themeBtn.textContent = dark ? "Switch to Light" : "Switch to Dark";
+    }
+
+    function initTheme() {
+      const saved = localStorage.getItem(THEME_KEY);
+      if (saved === "light" || saved === "dark") {
+        setTheme(saved);
+        return;
+      }
+      const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+      setTheme(prefersDark ? "dark" : "light");
+    }
+
+    function startCooldownTicker() {
+      if (cooldownTimerId) clearInterval(cooldownTimerId);
+      cooldownTimerId = setInterval(() => {
+        const wait = Math.max(0, RATE_LIMIT_MS - (Date.now() - lastRequestAt));
+        if (wait <= 0) {
+          cooldownLabel.textContent = "Ready";
+          return;
+        }
+        cooldownLabel.textContent = `Wait ${Math.ceil(wait / 1000)}s`;
+      }, 250);
+    }
+
+    function canSendNow() {
+      const wait = RATE_LIMIT_MS - (Date.now() - lastRequestAt);
+      return { ok: wait <= 0, waitMs: Math.max(0, wait) };
+    }
+
+    async function streamChatCompletion(conversationForApi, onToken) {
+      const res = await fetch(`${API_BASE}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          stream: true,
+          messages: conversationForApi
+        })
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`API error ${res.status}: ${text || "Unknown error"}`);
+      }
+
+      if (!res.body) throw new Error("Streaming is not available in this browser.");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line || !line.startsWith("data:")) continue;
+
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") return;
+
+          try {
+            const json = JSON.parse(payload);
+            const token = json?.choices?.[0]?.delta?.content ?? json?.choices?.[0]?.message?.content ?? "";
+            if (token) onToken(token);
+          } catch {
+            // Ignore malformed chunk to keep stream resilient.
+          }
+        }
+      }
+    }
+
+    async function sendMessage() {
+      hideWarning();
+      const userText = promptInput.value.trim();
+      if (!userText) return;
+
+      if (isRequestInFlight) {
+        showWarning("Wait for current response to finish.");
+        return;
+      }
+
+      const cooldown = canSendNow();
+      if (!cooldown.ok) {
+        showWarning(`Rate limit active. Try again in ${Math.ceil(cooldown.waitMs / 1000)} second(s).`);
+        return;
+      }
+
+      isRequestInFlight = true;
+      sendBtn.disabled = true;
+      setStatus("Streaming", "busy");
+      lastRequestAt = Date.now();
+
+      const userMessage = { id: uid(), role: "user", content: userText };
+      chatHistory.push(userMessage);
+      saveHistory();
+      renderAllMessages();
+
+      promptInput.value = "";
+      autoResizeInput();
+
+      const assistantMessage = { id: uid(), role: "assistant", content: "" };
+      chatHistory.push(assistantMessage);
+      renderMessage(assistantMessage);
+      scrollToBottom();
+
+      let firstTokenSeen = false;
+      const typingHolder = messagesEl.querySelector(`[data-id="${CSS.escape(assistantMessage.id)}"] .message-content`);
+      if (typingHolder) {
+        typingHolder.innerHTML = document.getElementById("typingTemplate").innerHTML;
+      }
+
+      try {
+        await streamChatCompletion(
+          chatHistory
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content })),
+          (token) => {
+            if (!firstTokenSeen) firstTokenSeen = true;
+            assistantMessage.content += token;
+            updateMessageContent(assistantMessage.id, assistantMessage.content, true);
+            scrollToBottom();
+          }
+        );
+
+        updateMessageContent(assistantMessage.id, assistantMessage.content, false);
+        saveHistory();
+        setStatus("Idle", "idle");
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        assistantMessage.content = assistantMessage.content || `Error: ${reason}`;
+        updateMessageContent(assistantMessage.id, assistantMessage.content, false);
+        saveHistory();
+        setStatus("Error", "error");
+        showWarning(reason);
+      } finally {
+        isRequestInFlight = false;
+        sendBtn.disabled = false;
+        scrollToBottom();
+      }
+    }
+
+    function clearChat() {
+      if (isRequestInFlight) {
+        showWarning("Cannot clear while response is streaming.");
+        return;
+      }
+      chatHistory = [];
+      saveHistory();
+      renderAllMessages();
+      hideWarning();
+      setStatus("Idle", "idle");
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    newChatBtn.addEventListener("click", clearChat);
+
+    themeBtn.addEventListener("click", () => {
+      const isDark = document.documentElement.classList.contains("dark");
+      setTheme(isDark ? "light" : "dark");
+    });
+
+    promptInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    });
+
+    promptInput.addEventListener("input", autoResizeInput);
+
+    window.addEventListener("load", () => {
+      initTheme();
+      chatHistory = loadHistory().map((m) => ({ ...m, id: m.id || uid() }));
+      renderAllMessages();
+      autoResizeInput();
+      startCooldownTicker();
+      setStatus("Idle", "idle");
+      promptInput.focus();
+    });
+  </script>
+</body>
+</html>
