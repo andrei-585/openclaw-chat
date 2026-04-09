@@ -324,6 +324,10 @@
       return { ok: wait <= 0, waitMs: Math.max(0, wait) };
     }
 
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
     async function streamChatCompletion(conversationForApi, onToken) {
       const res = await fetch(`${API_BASE}/chat/completions`, {
         method: "POST",
@@ -374,6 +378,40 @@
       }
     }
 
+    async function fetchChatCompletion(conversationForApi) {
+      const res = await fetch(`${API_BASE}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          stream: false,
+          messages: conversationForApi
+        })
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`API error ${res.status}: ${text || "Unknown error"}`);
+      }
+
+      const json = await res.json();
+      const content =
+        json?.choices?.[0]?.message?.content ??
+        json?.choices?.[0]?.delta?.content ??
+        "";
+      return typeof content === "string" ? content : "";
+    }
+
+    async function pseudoStream(text, onToken) {
+      const chars = Array.from(text);
+      for (const ch of chars) {
+        onToken(ch);
+        await sleep(8);
+      }
+    }
+
     async function sendMessage() {
       hideWarning();
       const userText = promptInput.value.trim();
@@ -415,17 +453,30 @@
       }
 
       try {
-        await streamChatCompletion(
-          chatHistory
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({ role: m.role, content: m.content })),
-          (token) => {
+        const conversationForApi = chatHistory
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({ role: m.role, content: m.content }));
+
+        try {
+          await streamChatCompletion(conversationForApi, (token) => {
             if (!firstTokenSeen) firstTokenSeen = true;
             assistantMessage.content += token;
             updateMessageContent(assistantMessage.id, assistantMessage.content, true);
             scrollToBottom();
+          });
+        } catch (streamError) {
+          const fallbackText = await fetchChatCompletion(conversationForApi);
+          assistantMessage.content = "";
+          await pseudoStream(fallbackText, (token) => {
+            assistantMessage.content += token;
+            updateMessageContent(assistantMessage.id, assistantMessage.content, true);
+            scrollToBottom();
+          });
+          if (!fallbackText) {
+            throw streamError;
           }
-        );
+          showWarning("Streaming failed. Used fallback response mode.");
+        }
 
         updateMessageContent(assistantMessage.id, assistantMessage.content, false);
         saveHistory();
